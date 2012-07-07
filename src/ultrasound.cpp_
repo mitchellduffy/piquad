@@ -1,0 +1,232 @@
+#include "ultrasound.h"
+#include <boost/thread.hpp>
+#include <boost/date_time.hpp>
+#include <stdio.h>
+#include <stdlib.h>
+#include <bcm2835.h>
+#include "utils.h"
+
+
+Ultrasound::Ultrasound(uint8_t trigger, uint8_t * pins, int pin_count) : m_trig(trigger), m_pin_count(pin_count)
+{
+  m_pins         = new uint8_t[pin_count];
+  m_status       = new UltrasoundStatus[pin_count];
+  m_send_time    = new long[pin_count];
+  m_return_time  = new long[pin_count];
+  m_dist         = new double[pin_count];
+  m_sensor_thread = new void*[pin_count];
+  m_master_thread = 0;
+  m_trigger_time = 0;
+  for (int i = 0; i < pin_count; i++)
+  {
+    m_pins[i]         = pins[i];
+    m_status[i]       = Ready;
+    m_send_time[i]    = 0;
+    m_return_time[i]  = 0;
+    m_dist[i]         = -1;
+  }
+  if (!bcm2835_init())
+  {
+    printf("unable to setup bcm2835 gpio \n");
+    exit(1);
+  }
+}
+
+void Ultrasound::start()
+{
+  if (m_master_thread == 0)
+  {
+    for (int i = 0; i < m_pin_count; i++)
+    {
+      m_sensor_thread[i] = (void*) new boost::thread(boost::bind(&Ultrasound::sensor_loop, this, i));
+    }
+
+    m_master_thread = (void*) new boost::thread(boost::bind(&Ultrasound::master_loop, this));
+  }
+}
+
+Ultrasound::~Ultrasound()
+{
+  delete m_pins;
+  delete m_status;
+  delete m_return_time;
+  delete m_dist;
+}
+
+
+void Ultrasound::master_loop()
+{
+  printf("master\n");
+}
+
+#define POLL_TIMEOUT 1000
+void Ultrasound::sensor_loop(int i)
+{
+
+/*
+
+  char devname[256];
+
+  sprintf(devname, "/sys/class/gpio/gpio%d/value", m_pins[i]);
+
+  char buf[2];
+  memset(rdbuf, 0x00, 2);
+
+
+  int file = open(devname, O_RDONLY);
+  if (file < 0)
+  {
+    printf("error opening ultrasound device\n");
+    return;
+  }
+
+  struct pollfd pfd;
+  pfd.fd = file;
+  pfd.events = POLLPRI;
+
+  int ret;
+
+  while (true)
+  {
+    memset(buf, 0x00, 2);
+    lseek(file, 0, SEEK_SET);
+    ret=poll(&pfd, 1, POLL_TIMEOUT);
+    if(ret<0) 
+    {
+      printf("poll error");
+      close(fd);
+      return 3;
+    }
+    if(ret==0) 
+    {
+      printf("timeout\n");
+      continue;
+    }
+    ret=read(fd, rdbuf, 1);
+    if(ret<0) 
+    {
+      perror("read()");
+      return 4;
+    }
+    printf("interrupt, value is: %s, time: %ld\n", rdbuf, usec());
+
+
+  }
+
+
+
+
+
+
+
+
+
+
+
+  return;
+*/
+
+
+  for (int p = 0; p < m_pin_count; p++)
+  {
+    bcm2835_gpio_fsel(m_pins[p], BCM2835_GPIO_FSEL_INPT);
+    //  with a pullup
+    bcm2835_gpio_set_pud(m_pins[p], BCM2835_GPIO_PUD_UP);
+  }
+
+  bcm2835_gpio_fsel(m_trig, BCM2835_GPIO_FSEL_OUTP);
+
+
+
+  delay(50);
+
+
+  uint8_t value;
+  int prev = 0;
+  long rise, fall;
+  bool r = true;
+  // Blink
+  while (1)
+  {
+    long diff = usec() - m_trigger_time;
+    if (diff > 0 && diff < 50000)
+      boost::this_thread::sleep(boost::posix_time::microseconds(50000-diff));
+
+    diff = usec() - m_trigger_time;
+    printf("since last: %d\n" ,diff);  
+
+
+    //printf("triggering...\n");
+    for (int p = 0; p < m_pin_count; p++)
+    {
+      m_status[p] = Triggered;
+    }
+    m_trigger_time = usec();
+    // triggering
+    bcm2835_gpio_write(m_trig, HIGH);
+    usleep(100);
+    bcm2835_gpio_write(m_trig, LOW);
+    usleep(50);
+
+
+    int loop_count = 0;
+    
+    printf("entering listening loop\n");
+    while (1)
+    {
+      if (loop_count % 10 == 0)
+      {
+        if (usec() - m_trigger_time > 23000)
+        {
+          for (int p = 0; p < m_pin_count; p++)
+          {
+            if (m_status[p] == Triggered)
+              m_dist[p] = -1;
+            if (m_status[p] == Sent)
+              m_dist[p] = 0;
+            m_status[p] = Received;
+          }
+          break;
+        }
+      }
+      loop_count++;
+      r = true;
+      for (int p = 0; p < m_pin_count; p++)
+      {
+        if (m_status[p] == Received) continue;
+        r = false;
+
+        value = bcm2835_gpio_lev(m_pins[p]);
+        printf("(%d %d) ", p, value);
+        if (m_status[p] == Triggered && value == 1)
+        {
+          printf("s raise\n");
+          m_send_time[p] = usec();
+          // pluse sent
+          m_status[p] = Sent;
+        }
+        if (value == 0 && m_status[p] == Sent)
+        {
+         printf("s fall\n");
+          m_return_time[p] = usec();
+          m_dist[p] = (double)(m_return_time[p] - m_send_time[p]) * 340 / 2 / 1000 / 1000;
+          m_status[p] = Received;
+        }
+      }
+      printf("\n");
+      if (r)
+        break;
+      boost::this_thread::sleep(boost::posix_time::microseconds(250));
+    }
+
+    for (int p = 0; p < m_pin_count; p++)
+      printf("%.2f cm ", m_dist[p]*100);
+    printf("\n");
+  }
+  
+  boost::this_thread::sleep(boost::posix_time::seconds(1));
+
+  
+
+
+}
