@@ -10,19 +10,16 @@ int loops;
 
 int main()
 {
+  // Initializations
   init_millis(); 
-
   IMU imu; 
-
   imu.setup();
-
   imu.initialize();
 
   // 
   usleep(IMU_MIN_SENSOR_REST * 1000);
 
   int loops = 0;
-
   int target_time_diff = 1.0 / TARGET_FREQ * 1000 * 1000;
 
   long time_last = usec();
@@ -31,7 +28,6 @@ int main()
   while (true)
   {
     int time_diff = usec() - time_last;
-    //printf("time diff: %d\n", time_diff);
     if (time_diff < target_time_diff)
     {
       usleep((target_time_diff - time_diff)/1.45);
@@ -53,7 +49,6 @@ int main()
     g = imu.getG();
 
     printf("d %6dus %.0fHz    %9.6f %9.6f %9.6f    %9.6f %9.6f %9.6f    %9.6f %9.6f %9.6f\n", 
-      //millis(),
       time_diff,
       avg_freq,
       a.x(), a.y(), a.z(),
@@ -89,22 +84,12 @@ int main()
 
     VectorND<7> kal;
     kal= imu.getPosKalman();
+    
     printf("K ");
     printf("%9.6f %9.6f %9.6f %9.6f   %9.6f %9.6f %9.6f\n",
       kal(0), kal(1), kal(2), kal(3), kal(4), kal(5), kal(6)
       );
-/*
-    kal = imu.getPosKalmanErr();
-    printf("K ");
-    printf("%9.6f %9.6f %9.6f %9.6f   %9.6f %9.6f %9.6f\n",
-      kal(0), kal(1), kal(2), kal(3), kal(4), kal(5), kal(6)
-      );
-    */
-
-
+    
     loops++;
   }
-
-
 }
-
